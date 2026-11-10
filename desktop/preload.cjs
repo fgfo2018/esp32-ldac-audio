@@ -1,0 +1,3 @@
+const {contextBridge,ipcRenderer}=require('electron');
+const allowed=new Set(['snapshot','scan','connect','disconnect','control','probe','flash','backup','restore','driverStatus','driverInstall','driverRemove','settings','soundSettings','exportLogs','forget']);
+contextBridge.exposeInMainWorld('audio',{call:(method,params={})=>{if(!allowed.has(method))throw Error('Unknown operation');return ipcRenderer.invoke('audio:call',method,params)},onEvent:fn=>{const handler=(_,event)=>fn(event);ipcRenderer.on('audio:event',handler);return()=>ipcRenderer.removeListener('audio:event',handler)},window:action=>{if(['minimize','close'].includes(action))ipcRenderer.send('window',action)}});

@@ -1,0 +1,9 @@
+# Python 3.12 / Windows x64; exact versions used by the 0.1.4 build.
+bumble @ git+https://github.com/google/bumble.git@c153c0dedb42f66dad6f75e7ff7b9d9aa891aa6f
+numpy==2.5.1
+soxr==1.1.0
+PyAudioWPatch==0.2.12.9
+pyserial==3.5
+pyserial-asyncio==0.6
+esptool==5.6.0
+pyinstaller==6.22.2

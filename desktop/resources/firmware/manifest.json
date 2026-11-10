@@ -1,0 +1,6 @@
+{
+  "bootloader.bin": "3d234a7471f67b013686dabd4dee7c1fa915c9928463616a94bc9297acf1abf8",
+  "partitions.bin": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1",
+  "boot_app0.bin": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0",
+  "firmware.bin": "6b93e6ec68ab1b484f245ae83f9b44340013929f6f64b3e87feea2fa9bec5f3b"
+}

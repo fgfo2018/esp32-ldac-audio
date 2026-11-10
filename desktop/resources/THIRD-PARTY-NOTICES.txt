@@ -1,0 +1,25 @@
+ESP32 Audio uses:
+
+Electron: https://www.electronjs.org/ (MIT; Chromium and Node.js notices are included in the application distribution)
+Google Bumble: https://github.com/google/bumble (Apache-2.0; see licenses/Bumble-LICENSE.txt)
+Sony libldac encoder: https://android.googlesource.com/platform/external/libldac/ (Apache-2.0; see licenses/Sony-libldac-LICENSE.txt)
+PyAudioWPatch: https://github.com/s0d3s/PyAudioWPatch (MIT; PortAudio licenses apply)
+python-soxr / libsoxr: https://github.com/dofuuz/python-soxr (LGPL-2.1-or-later)
+NumPy: https://numpy.org/ (BSD-3-Clause and bundled library notices)
+pySerial / pyserial-asyncio: https://github.com/pyserial/pyserial (BSD-3-Clause)
+esptool: https://github.com/espressif/esptool (GPL-2.0-or-later; original source is available at this URL)
+ESP32 firmware framework: https://github.com/espressif/arduino-esp32 (LGPL-2.1-or-later), ESP-IDF (Apache-2.0), Espressif binary controller licenses.
+PyInstaller: https://pyinstaller.org/ (GPL with bootloader distribution exception)
+
+The Python process uses dynamic libraries. Original source and rebuild instructions
+are provided with this project. Firmware source is in ../firmware. Original licenses and vendor distribution conditions remain applicable.
+
+VB-CABLE is an unmodified third-party installer, not an ESP32 Audio driver.
+Origin: https://www.vb-cable.com/ (VB-Audio Software).
+VB-CABLE is donationware; contributions are welcome.
+Distribution permission and conditions: https://vb-audio.com/Services/licensing.htm
+Company/professional deployments require appropriate VB-Audio licenses.
+See vbcable/readme.txt and vbcable/Distribution-permission.html.
+
+This application does not use LDACast's BTstack or WinUSB transport.
+LDAC is a trademark of Sony. No affiliation with Sony, Espressif or VB-Audio is implied.

@@ -1,0 +1,20 @@
+ESP32 Audio — Windows development preview
+
+This application sends Windows playback audio to compatible Bluetooth headphones
+using an ESP32 bridge. LDAC is lossy. Only classic ESP32 boards with at least 4 MB
+Flash are supported by the included firmware. Flashing replaces existing firmware;
+the application creates a complete backup before writing.
+
+The installer can install VB-CABLE by VB-Audio Software.
+Origin: https://www.vb-cable.com/
+VB-CABLE is donationware; contributions are welcome.
+Company/professional deployments require appropriate VB-Audio licenses.
+Unmodified original licensing is included in resources/assets/vbcable/readme.txt.
+Current distribution permission: https://vb-audio.com/Services/licensing.htm
+An existing VB-CABLE installation is preserved and is never claimed by this app.
+Administrator approval and a Windows restart may be required for the driver.
+
+The Electron UI is MIT-licensed. The bundled Python audio engine is GPL-3.0-or-later
+as a combined distribution including esptool. Corresponding project source and
+third-party notices are included in resources/assets/source and licenses.
+Additional third-party licenses remain applicable; see THIRD-PARTY-NOTICES.txt.

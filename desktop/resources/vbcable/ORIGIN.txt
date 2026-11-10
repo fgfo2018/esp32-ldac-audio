@@ -1,0 +1,4 @@
+VB-CABLE by VB-Audio: https://www.vb-cable.com/
+VB-CABLE is donationware; contributions are welcome.
+Redistributed unmodified under https://vb-audio.com/Services/licensing.htm
+Professional deployments require appropriate licenses.

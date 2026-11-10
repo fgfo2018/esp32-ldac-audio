@@ -1,0 +1,35 @@
+# Local environments and build output
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pio/
+desktop/backend-dist/
+desktop/build/
+desktop/dist/
+release-assets/
+*.log
+*.log.previous
+*.spec
+# Local device data, pairing secrets and flash backups
+**/test-data/
+**/pairing.json
+**/peers.json
+**/settings.json
+**/legacy-imported.json
+**/baud.txt
+**/backup*/
+before-audio.bin
+scan-results.json
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+# Local screenshots and handover notes
+smoke-*/
+screenshots*/
+RESUME.md
+.DS_Store
+Thumbs.db

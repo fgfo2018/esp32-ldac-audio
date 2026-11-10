@@ -1,0 +1,52 @@
+{
+  "name": "esp32-audio",
+  "version": "0.1.4",
+  "description": "ESP32 Bluetooth audio bridge for Windows",
+  "author": "ESP32 Audio",
+  "license": "MIT",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.cjs && node --check preload.cjs && node --check ui/app.js && node --check ui/meter.js && node --check ui/problems.js",
+    "pack": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "local.esp32.audio",
+    "productName": "ESP32 Audio",
+    "asar": true,
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "ui/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend-dist",
+        "to": "backend"
+      },
+      {
+        "from": "resources",
+        "to": "assets"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "ESP32-Audio-Setup-${version}.${ext}",
+      "icon": "resources/app.ico",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "include": "installer.nsh",
+      "createDesktopShortcut": true,
+      "license": "resources/INSTALL-NOTICE.txt"
+    }
+  }
+}
