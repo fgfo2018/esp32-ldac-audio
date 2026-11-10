@@ -3,7 +3,7 @@
 透過 ESP32，將 Windows 電腦的聲音傳送到支援 LDAC 的藍牙耳機。
 提供 macOS 原生淺色風格的 Electron 介面、耳機配對、音量控制及新板子韌體寫入。
 
-[下載 Windows 安裝檔](https://github.com/fgfo2018/esp32-ldac-audio/releases/latest) ·
+[下載 Windows 安裝檔](https://github.com/fgfo2018/esp32-ldac-audio/releases/tag/v0.1.4) ·
 [建置說明](docs/BUILDING.md) · [故障排除](docs/TROUBLESHOOTING.md) · [更新紀錄](CHANGELOG.md)
 
 ## 運作方式
