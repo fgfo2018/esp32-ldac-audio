@@ -3,7 +3,7 @@
 透過 ESP32，將 Windows 電腦的聲音傳送到支援 LDAC 的藍牙耳機。
 提供 macOS 原生淺色風格的 Electron 介面、耳機配對、音量控制及新板子韌體寫入。
 
-[下載 Windows 安裝檔](https://github.com/fgfo2018/esp32-ldac-audio/releases/tag/v0.1.4) ·
+[下載 Windows 安裝檔](https://github.com/fgfo2018/esp32-ldac-audio/releases/tag/v0.1.6) ·
 [建置說明](docs/BUILDING.md) · [故障排除](docs/TROUBLESHOOTING.md) · [更新紀錄](CHANGELOG.md)
 
 ![主畫面：耳機連線、音量、音訊來源與 LDAC 音質設定](docs/images/home.png)
@@ -66,12 +66,12 @@ ESP32-S2／S3／C3 等板子不能直接使用此韌體。耳機需支援 Blueto
 
 ### 1. 下載並安裝程式
 
-1. 開啟 [v0.1.4 Release](https://github.com/fgfo2018/esp32-ldac-audio/releases/tag/v0.1.4)。
-2. 在 **Assets** 下載 **`ESP32-Audio-Setup-0.1.4.exe`** 並執行，也可以[直接下載 EXE](https://github.com/fgfo2018/esp32-ldac-audio/releases/download/v0.1.4/ESP32-Audio-Setup-0.1.4.exe)。一般使用者不需要另外安裝 Python 或 Node.js。
+1. 開啟 [v0.1.6 Release](https://github.com/fgfo2018/esp32-ldac-audio/releases/tag/v0.1.6)。
+2. 在 **Assets** 下載 **`ESP32-Audio-Setup-0.1.6.exe`** 並執行，也可以[直接下載 EXE](https://github.com/fgfo2018/esp32-ldac-audio/releases/download/v0.1.6/ESP32-Audio-Setup-0.1.6.exe)。一般使用者不需要另外安裝 Python 或 Node.js。
 3. 依安裝精靈完成安裝。詢問是否安裝 **VB-CABLE 虛擬音效卡** 時，首次使用請選擇安裝；如果已有 VB-CABLE，程式會保留原本的安裝。
 4. 驅動安裝可能需要管理員允許或重新啟動 Windows，依畫面提示完成後，再開啟 **ESP32 Audio**。
 
-`Source code`／`ESP32-Audio-Source-0.1.4.zip` 是開發用原始碼，一般使用者下載 EXE 即可。安裝檔尚未做應用程式碼簽章；VB-CABLE 使用原廠簽署套件。
+`Source code`／`ESP32-Audio-Source-0.1.6.zip` 是開發用原始碼，一般使用者下載 EXE 即可。應用程式安裝檔未簽章。VB-CABLE 使用原廠簽署套件。
 
 ### 2. 接上 ESP32，設定音訊橋接韌體
 
@@ -178,7 +178,7 @@ ESP32-S2／S3／C3 等板子不能直接使用此韌體。耳機需支援 Blueto
 ## 已知限制
 
 開發中版本新增 HFP 控制通道：WH-1000XM4 已實測回報 10% 電量（每 10% 一格），
-同時維持 LDAC 660 kbps 播放，不啟動 SCO 通話音訊。此修正尚未包含在 v0.1.4 發行版。
+同時維持 LDAC 660 kbps 播放。HFP 只使用控制通道讀取電量。此修正已包含在 v0.1.6 發行版。
 另保留 Fast Pair／Sony MDR v1 讀取方式；能否取得電量依耳機實際支援情況而定。
 手動中斷後，重新按連線、切換自動連線設定或重開程式可恢復自動連線。
 
