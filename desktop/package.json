@@ -1,6 +1,6 @@
 {
   "name": "esp32-audio",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "description": "ESP32 Bluetooth audio bridge for Windows",
   "author": "ESP32 Audio",
   "license": "MIT",

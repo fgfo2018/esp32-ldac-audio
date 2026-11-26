@@ -18,7 +18,7 @@ import soxr
 import serial
 import serial_asyncio
 from bumble.a2dp import VendorSpecificMediaCodecInformation, SbcMediaCodecInformation, make_audio_source_service_sdp_records
-from bumble.avdtp import MediaCodecCapabilities, MediaPacketPump, Protocol
+from bumble.avdtp import MediaCodecCapabilities, MediaPacketPump, Protocol, RealtimeClock
 from bumble.core import PhysicalTransport, AdvertisingData
 from bumble.device import Device
 from bumble import avrcp, avc
@@ -27,9 +27,59 @@ from bumble.transport.common import Transport, StreamPacketSink
 from bumble.transport.serial import SerialPacketSource
 
 ROOT = Path(__file__).resolve().parent
+PCM_BLOCK = 128 * 2 * 4
+
+
+class MonotonicClock(RealtimeClock):
+    def now(self):
+        return time.perf_counter()
+
+
+class CaptureBuffer:
+    """Prime on startup or after depletion while keeping the RTP clock running."""
+
+    def __init__(self, queue, rate, delay_ms, block_size=PCM_BLOCK):
+        self.queue = queue
+        self.block_size = block_size
+        self.target = math.ceil(rate * delay_ms * 8 / 1000 / block_size) * block_size
+        self.prime_timeout = delay_ms / 1000 + 0.08
+        self.buffer = bytearray()
+        self.priming = True
+        self.first_chunk_at = None
+        self.rebuffers = 0
+        self.removed_bytes = 0
+
+    def read(self, now):
+        size = self.block_size
+        self.removed_bytes = 0
+        required = self.target if self.priming else size
+        while len(self.buffer) < required and not self.queue.empty():
+            chunk = self.queue.get_nowait()
+            self.removed_bytes += len(chunk)
+            self.buffer.extend(chunk)
+        if self.priming:
+            if self.first_chunk_at is None and self.buffer:
+                self.first_chunk_at = now
+            if len(self.buffer) < required and (
+                self.first_chunk_at is None or now - self.first_chunk_at < self.prime_timeout
+            ):
+                return bytes(size)
+            self.priming = False
+        if len(self.buffer) < size:
+            self.priming = True
+            self.first_chunk_at = None
+            self.rebuffers += 1
+            tail = bytes(self.buffer).ljust(size, b'\0')
+            self.buffer.clear()
+            return tail
+        block = bytes(self.buffer[:size])
+        del self.buffer[:size]
+        return block
 
 
 class Encoder:
+    frame_samples = 128
+
     def __init__(self, rate=48000, quality=2, mtu=679):
         self.rate = rate
         self.dll = C.CDLL(str(ROOT / 'ldacBT_enc.dll'))
@@ -42,10 +92,25 @@ class Encoder:
         self.handle = self.dll.ldacBT_get_handle()
         if not self.handle:
             raise RuntimeError('LDAC allocation failed')
-        result = self.dll.ldacBT_init_handle_encode(self.handle, mtu, quality, 1, 5, rate)
+        result = self.dll.ldacBT_init_handle_encode(self.handle, mtu, quality, 1, 5, self.rate)
         if result:
-            raise RuntimeError(f'LDAC init: {self.dll.ldacBT_get_error_code(self.handle):x}')
+            error = self.dll.ldacBT_get_error_code(self.handle)
+            self.close()
+            raise RuntimeError(f'LDAC init: {error:x}')
         self.output = C.create_string_buffer(4096)
+
+    def split_frames(self, payload, count):
+        for _ in range(count):
+            if len(payload) < 3 or payload[0] != 0xAA:
+                raise ValueError('LDAC 封包缺少音訊框標頭')
+            # Nine-bit body length, stored minus one, plus three header bytes.
+            length = ((payload[1] & 7) << 6 | (payload[2] >> 2)) + 4
+            if length > len(payload):
+                raise ValueError('LDAC 音訊框長度錯誤')
+            yield payload[:length]
+            payload = payload[length:]
+        if payload:
+            raise ValueError('LDAC 音訊框數量錯誤')
 
     def encode(self, pcm):
         if len(pcm) != 128 * 2 * 4:
@@ -109,14 +174,20 @@ async def scan(device, seconds):
     (ROOT / 'scan-results.json').write_text(json.dumps(found, indent=2), encoding='utf-8')
 
 
-async def packets(encoder, seconds, live=False, gain=0.1):
+async def packets(encoder, seconds, live=False, gain=0.1, buffer_ms=0, link_backlog=None):
     """Generate quiet test tone or WASAPI output loopback, never microphone."""
     total = seq = sent = frames_sent = 0
     pa = stream = None
     queue = asyncio.Queue(maxsize=128)
+    frame_samples = encoder.frame_samples
+    block_size = frame_samples * 8
+    capture = CaptureBuffer(queue, encoder.rate, buffer_ms, block_size) if live and buffer_ms else None
     buffer = bytearray()
     dropped = 0
+    queued_bytes = 0
+    capture_peak = 0
     peak = 0.0
+    serial_peak = acl_peak = last_sent = last_frames = 0
     loop = asyncio.get_running_loop()
     start = time.monotonic()
     if live:
@@ -131,14 +202,18 @@ async def packets(encoder, seconds, live=False, gain=0.1):
         resampler = soxr.ResampleStream(source_rate, encoder.rate, 2, dtype='float32') if source_rate != encoder.rate else None
         print(f'CAPTURE OUTPUT ONLY: {info["name"]}; gain={gain}', flush=True)
         def enqueue(data,chunk_peak):
-            nonlocal dropped,peak
+            nonlocal dropped,peak,queued_bytes,capture_peak
             peak=max(peak,chunk_peak)
             meter=getattr(encoder,'meter',None)
             if meter:meter.push(chunk_peak)
-            if queue.full():
-                queue.get_nowait()
+            limit = (max(capture.target + encoder.rate * 8 * 60 // 1000
+                         - len(capture.buffer), len(data)) if capture else None)
+            while not queue.empty() and (queue.full() or (limit and queued_bytes + len(data) > limit)):
+                queued_bytes -= len(queue.get_nowait())
                 dropped += 1
             queue.put_nowait(data)
+            queued_bytes += len(data)
+            capture_peak = max(capture_peak, queued_bytes + (len(capture.buffer) if capture else len(buffer)))
         def callback(data, frame_count, time_info, status):
             floats = np.frombuffer(data, dtype=np.float32).reshape(-1, channels)
             if channels == 1:
@@ -156,32 +231,66 @@ async def packets(encoder, seconds, live=False, gain=0.1):
     try:
         while total < seconds * encoder.rate:
             if live:
-                while len(buffer) < 1024:
-                    try:
-                        buffer.extend(await asyncio.wait_for(queue.get(), 0.03))
-                    except TimeoutError:
-                        # WASAPI can stop delivering when no audio is playing.
-                        buffer.extend(bytes(1440 * 2 * 4))
-                raw = bytes(buffer[:1024]); del buffer[:1024]
-                floats = struct.unpack('<256f', raw)
+                if capture:
+                    raw = capture.read(loop.time())
+                    queued_bytes -= capture.removed_bytes
+                else:
+                    while len(buffer) < block_size:
+                        try:
+                            chunk = await asyncio.wait_for(queue.get(), 0.03)
+                            queued_bytes -= len(chunk)
+                            buffer.extend(chunk)
+                        except TimeoutError:
+                            # WASAPI can stop delivering when no audio is playing.
+                            buffer.extend(bytes(1440 * 2 * 4))
+                    raw = bytes(buffer[:block_size]); del buffer[:block_size]
                 actual_gain = getattr(encoder, 'gain', gain)
-                pcm = struct.pack('<256f', *(max(-1, min(1, x * actual_gain)) for x in floats))
+                pcm = np.clip(np.frombuffer(raw, dtype='<f4') * actual_gain, -1, 1).tobytes()
             else:
-                samples = [gain * math.sin(2 * math.pi * 440 * (total + i) / encoder.rate) for i in range(128)]
-                pcm = struct.pack('<256f', *(x for v in samples for x in (v, v)))
+                samples = [gain * math.sin(2 * math.pi * 440 * (total + i) / encoder.rate) for i in range(frame_samples)]
+                pcm = struct.pack(f'<{frame_samples * 2}f', *(x for v in samples for x in (v, v)))
             payload, nframes = encoder.encode(pcm)
-            total += 128
+            total += frame_samples
             if not payload:
                 continue
-            packet = MediaPacket(2, 0, 0, 0, seq, frames_sent * 128, 1, [], 96, bytes([nframes]) + payload)
-            packet.timestamp_seconds = frames_sent * 128 / encoder.rate
-            frames_sent += nframes
             sent += len(payload)
-            seq += 1
-            if seq % 200 == 0:
-                print(f'STREAM packets={seq} encoded_bytes={sent} audio_seconds={frames_sent*128/encoder.rate:.2f} capture_drops={dropped} input_peak={peak:.4f}', flush=True)
+            timestamp = frames_sent
+            frames_sent += nframes * frame_samples
+            mtu = getattr(encoder, 'media_mtu', 1000)
+            if mtu <= 12:
+                raise ValueError('耳機的音訊封包大小無效')
+            if getattr(encoder, 'allow_fragmentation', False):
+                size = mtu - 12
+                chunks = ((timestamp, int(offset + size >= len(payload)), payload[offset:offset+size])
+                          for offset in range(0, len(payload), size))
+            elif len(payload) + 13 <= mtu:
+                chunks = ((timestamp, 0, bytes([nframes]) + payload),)
+            elif isinstance(encoder, Encoder):
+                chunks = ((timestamp + index * frame_samples, 0, b'\x01' + frame)
+                          for index, frame in enumerate(encoder.split_frames(payload, nframes)))
+            else:
+                raise ValueError('耳機封包大小不足，無法傳送選擇的編碼')
+            for sample_time, marker, chunk in chunks:
+                if len(chunk) + 12 > mtu:
+                    raise ValueError('耳機封包大小不足，無法傳送選擇的編碼')
+                packet = MediaPacket(2, 0, 0, marker, seq, sample_time, 1, [], 96, chunk)
+                packet.timestamp_seconds = sample_time / encoder.rate
+                seq += 1
+                yield packet
+            if link_backlog:
+                serial_bytes, acl_pending = link_backlog()
+                serial_peak = max(serial_peak, serial_bytes)
+                acl_peak = max(acl_peak, acl_pending)
+            if frames_sent - last_frames >= encoder.rate * 2:
+                kbps = (sent - last_sent) * 8 * encoder.rate / ((frames_sent - last_frames) * 1000)
+                print(f'STREAM packets={seq} encoded_bytes={sent} audio_seconds={frames_sent/encoder.rate:.2f} '
+                      f'capture_drops={dropped} input_peak={peak:.4f} encoded_kbps={kbps:.1f} '
+                      f'capture_rebuffers={capture.rebuffers if capture else 0} '
+                      f'capture_peak_ms={capture_peak * 1000 / (encoder.rate * 8):.1f} '
+                      f'serial_peak_bytes={serial_peak} acl_peak_packets={acl_peak}', flush=True)
+                last_sent, last_frames = sent, frames_sent
+                serial_peak = acl_peak = capture_peak = 0
                 peak=0.0
-            yield packet
         print(f'STREAM COMPLETE packets={seq} encoded_bytes={sent} elapsed={time.monotonic()-start:.2f}s capture_drops={dropped}', flush=True)
     finally:
         if stream:

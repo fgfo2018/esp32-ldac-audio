@@ -33,7 +33,7 @@ class FirmwareSafety(unittest.IsolatedAsyncioTestCase):
             if count>1:raise asyncio.CancelledError
         with patch.object(engine.asyncio,'sleep',tick):
             with self.assertRaises(asyncio.CancelledError):await self.e.autoconnect()
-        self.e.connect.assert_awaited_once_with({'port':'COM6'})
+        self.e.connect.assert_awaited_once_with({'port':'COM6','_automatic':True})
     async def test_incomplete_backup_preserves_existing_file(self):
         dest=self.root/'backup.bin';dest.write_bytes(b'previous backup')
         async def tool(args):

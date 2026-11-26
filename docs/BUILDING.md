@@ -17,7 +17,7 @@ powershell -ExecutionPolicy Bypass -File build-engine.ps1
 npm run pack
 ```
 
-輸出：desktop/dist/ESP32-Audio-Setup-0.1.4.exe。
+輸出：desktop/dist/ESP32-Audio-Setup-0.1.6.exe。
 內附通用編碼器 DLL、ESP32 韌體映像和原廠 VB-CABLE 套件，沒有個人配對資料。
 Bumble 固定於已驗證的 Git commit，Python 版本列在 requirements.txt。
 開發模式在 desktop 執行 `npm start`；使用 Python 原始碼，無須先打包引擎。

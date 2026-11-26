@@ -3,15 +3,17 @@ import argparse, asyncio, ctypes, hashlib, json, logging, os, re, sys, time
 from quality import AdaptiveQuality
 from battery import monitor_battery
 from meter import PeakMeter
+from status_led import StatusLed
 from pathlib import Path
 from types import SimpleNamespace
 import serial.tools.list_ports
 import pc_audio as audio
+from a2dp_codecs import CODEC_IDS, configure_aac, configure_sbc
 from bumble import avrcp, avc, hci
 from bumble.device import Device
 from bumble.keys import JsonKeyStore
 from bumble.core import AdvertisingData, PhysicalTransport
-from bumble.avdtp import Protocol, MediaPacketPump
+from bumble.avdtp import Protocol, MediaPacketPump, AVDTP_DELAY_REPORTING_SERVICE_CATEGORY, AVDTP_TSEP_SNK
 from bumble.a2dp import make_audio_source_service_sdp_records
 
 OUT = sys.stdout
@@ -30,6 +32,8 @@ class Engine:
         self.status='idle';self.rssi=None;self.baud=921600;self.progress=0
         self.active_port=None;self.stats={};self.last_manual_disconnect=0
         self.packet_sink=None;self.effective_quality=2
+        self.codec=None;self.sink_delay=None
+        self.led=None;self.reconnecting=False
         self.checked_port=None
         self.battery=None;self.auto_paused=False
         self.operation_lock=asyncio.Lock();self.next_retry=0.0;self.problem=None
@@ -44,10 +48,16 @@ class Engine:
         emit('log',message=line)
         if line.startswith('STREAM packets='):
             fields=dict(re.findall(r'(\w+)=([\d.]+)',line))
-            self.stats={k:float(v) for k,v in fields.items()};emit('metrics',**self.stats,rssi=self.rssi,quality=self.effective_quality)
+            self.stats={k:float(v) for k,v in fields.items()}
+            emit('metrics',**self.stats,rssi=self.rssi,quality=self.effective_quality,
+                 codec=self.codec,sink_delay_ms=self.sink_delay)
 
     def state(self,status,**extra):
         self.status=status
+        if status not in ('paired','streaming'):
+            self.codec=None;self.sink_delay=None
+        if self.led:
+            self.led.update('reconnecting' if status=='connecting' and self.reconnecting else status)
         self.problem={'message':extra['message'],'detail':extra.get('detail',extra['message'])} if extra.get('message') and status in ('error','waiting','paired') else None
         emit('status',status=status,problem=self.problem,**extra)
         if status!='streaming':emit('level',peak=0.0)
@@ -61,7 +71,7 @@ class Engine:
             return [{'index':d['index'],'name':d['name'].replace(' [Loopback]',''),'rate':int(d['defaultSampleRate']),'channels':d['maxInputChannels']} for d in pa.get_loopback_device_info_generator()]
 
     async def snapshot(self,_):
-        return {'ports':self.ports(),'outputs':await asyncio.to_thread(self.endpoints),'status':self.status,'peers':self.peers,'volume':self.volume,'battery':self.battery,'problem':self.problem,'baud':self.baud,'settings':self.settings,'stats':self.stats,'driver':await self.driverStatus({})}
+        return {'ports':self.ports(),'outputs':await asyncio.to_thread(self.endpoints),'status':self.status,'peers':self.peers,'volume':self.volume,'battery':self.battery,'problem':self.problem,'baud':self.baud,'settings':self.settings,'stats':self.stats,'codec':self.codec,'sink_delay_ms':self.sink_delay,'driver':await self.driverStatus({})}
 
     def get_port(self,p):
         port=p.get('port') or self.settings.get('port')
@@ -89,6 +99,10 @@ class Engine:
         d=Device.from_config_file_with_hci(str(config),tr.source,tr.sink)
         d.classic_enabled=True;d.le_enabled=False
         d.sdp_service_records={0x10001:make_audio_source_service_sdp_records(0x10001),0x10002:avrcp.ControllerServiceSdpRecord(0x10002).to_service_attributes()}
+        # Control-only HFP; an opt-out is available for incompatible headsets.
+        if os.environ.get('ESP32_AUDIO_HFP_BATTERY','1')!='0':
+            from hfp_battery import HfpBatteryService
+            d.hfp_battery=HfpBatteryService(d,self.forward)
         remote=avrcp.Protocol();remote.listen(d)
         if os.environ.get('ESP32_AUDIO_DEBUG'):
             original=d.host.send_sync_command
@@ -124,7 +138,7 @@ class Engine:
         try:await coro
         except asyncio.CancelledError:raise
         except Exception as e:
-            self.checked_port=None;self.next_retry=time.monotonic()+10
+            self.checked_port=None;self.next_retry=time.monotonic()+5
             self.forward(type(e).__name__,str(e))
             if isinstance(e,UsbDisconnected):self.state('waiting',message='ESP32 USB 已中斷，請重新插入裝置。')
             elif 'PAGE_TIMEOUT' in str(e):self.state('error',detail=str(e),message='耳機未回應連線。請確認耳機已開機，並暫時中斷手機連線；自動連線開啟時會稍後重試。')
@@ -137,15 +151,24 @@ class Engine:
         # A removed USB controller cannot produce a Bluetooth disconnection event.
         # Race transport termination against the ENTIRE session, including pairing.
         task=asyncio.create_task(session)
+        failed=False
         try:
             done,_=await asyncio.wait([task,tr.source.terminated],return_when=asyncio.FIRST_COMPLETED)
             if tr.source.terminated in done:
                 self.checked_port=None
                 raise UsbDisconnected('USB transport terminated')
             return await task
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            failed=True
+            raise
         finally:
             if not task.done():task.cancel()
             await asyncio.gather(task,return_exceptions=True)
+            if self.led:
+                await self.led.close(failed=failed,transport_lost=tr.source.terminated.done())
+                self.led=None
 
     async def probe(self,p):
         if self.task and not self.task.done():raise ValueError('請先中斷音訊連線')
@@ -173,6 +196,8 @@ class Engine:
 
     async def _scan_session(self,tr):
         d,_=await self.make_device(tr)
+        self.led=StatusLed(d,self.forward)
+        await self.led.start('scanning')
         done=asyncio.Event();count=0
         d.on('inquiry_complete',lambda:done.set())
         def found(addr,cod,data,rssi):
@@ -187,14 +212,18 @@ class Engine:
         self.state('idle',message='搜尋完成。沒有找到裝置，請讓耳機進入 Bluetooth pairing 模式；已配對的耳機可直接連線。' if count==0 else f'搜尋完成，收到 {count} 筆裝置回應。')
 
     async def connect(self,p):
-        await self.stop();address=p.get('address') or self.settings.get('address','')
+        codec=p.get('codec',self.settings.get('codec','LDAC'))
+        if codec not in CODEC_IDS:raise ValueError('不支援的藍牙編碼')
+        address=p.get('address') or self.settings.get('address','')
         if not re.fullmatch(r'(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}',address):raise ValueError('請選擇耳機')
         port=self.get_port(p);quality=int(p.get('quality',self.settings.get('quality',2)))
         if quality not in (0,1,2):raise ValueError('不支援的音質選項')
+        await self.stop()
         if self.checked_port!=port:await self.probe({'port':port})
-        if quality==0 and self.baud<1500000:raise ValueError('990 kbps 需要新版 2 Mbps 橋接韌體；請先更新並偵測裝置')
-        self.settings.update({'address':address,'port':port,'quality':quality,'capture':p.get('capture',self.settings.get('capture',''))})
+        if codec=='LDAC' and quality==0 and self.baud<1500000:raise ValueError('990 kbps 需要新版 2 Mbps 橋接韌體；請先更新並偵測裝置')
+        self.settings.update({'address':address,'port':port,'codec':codec,'quality':quality,'capture':p.get('capture',self.settings.get('capture',''))})
         self.auto_paused=False
+        self.reconnecting=bool(p.get('_automatic'))
         self.active_port=port;self.state('connecting',address=address)
         self.task=asyncio.create_task(self._guard(self._play(port,address,p)));return True
 
@@ -205,6 +234,8 @@ class Engine:
     async def _play_session(self,tr,port,address,p):
         self.packet_sink=tr.sink
         d,remote=await self.make_device(tr)
+        self.led=StatusLed(d,self.forward)
+        await self.led.start('reconnecting' if self.reconnecting else 'connecting')
         connection=await asyncio.wait_for(d.connect(address,transport=PhysicalTransport.BR_EDR),30)
         self.connection=connection
         ended=asyncio.Event();connection.on('disconnection',lambda *a:ended.set())
@@ -225,6 +256,8 @@ class Engine:
         protocol=await asyncio.wait_for(Protocol.connect(connection),10)
         endpoints=await asyncio.wait_for(protocol.discover_remote_endpoints(),15);codecs=[]
         for ep in endpoints:
+            if ep.tsep != AVDTP_TSEP_SNK:
+                continue
             for cap in ep.capabilities:
                 if hasattr(cap,'media_codec_type'):
                     info=getattr(cap,'media_codec_information',None)
@@ -232,11 +265,25 @@ class Engine:
                     if name and name not in codecs:codecs.append(name)
         self.peers[address]={'name':p.get('name') or self.peers.get(address,{}).get('name',address),'codecs':codecs}
         (self.data/'peers.json').write_text(json.dumps(self.peers,ensure_ascii=False),'utf-8')
-        emit('capabilities',address=address,codecs=codecs,implemented=['LDAC'])
-        sink=protocol.find_remote_sink_by_codec(0,255,301,170)
+        emit('capabilities',address=address,codecs=codecs,implemented=list(CODEC_IDS))
+        codec=self.settings.get('codec','LDAC')
+        sink=protocol.find_remote_sink_by_codec(0,*CODEC_IDS[codec])
         if sink is None:
-            self.state('paired',message='配對成功；此耳機目前未提供 LDAC。SBC 播放尚在開發。');await connection.disconnect();return
-        encoder=audio.Encoder(48000,int(self.settings.get('quality',2)));self.encoder=encoder
+            self.state('paired',message=f'耳機目前未提供 {codec}，請選擇其他藍牙編碼。');await connection.disconnect();return
+        if codec=='LDAC':
+            info=next(cap.media_codec_information for cap in sink.capabilities if getattr(cap,'media_codec_type',None)==255)
+            rate=next((rate for rate,flag in ((48000,0x10),(44100,0x20)) if info.value[0]&flag),None)
+            if rate is None or not info.value[1]&1:
+                raise ValueError('耳機未提供 44.1 或 48 kHz 的 LDAC 立體聲')
+            encoder=audio.Encoder(rate,int(self.settings.get('quality',2)))
+            configuration=audio.caps(rate)
+        else:
+            info=next(cap.media_codec_information for cap in sink.capabilities if getattr(cap,'media_codec_type',None)==CODEC_IDS[codec][0])
+            configured=(configure_aac if codec=='AAC' else configure_sbc)(info)
+            if configured is None:
+                self.state('paired',message=f'耳機的 {codec} 參數與目前編碼器不相容，請選擇其他編碼。');await connection.disconnect();return
+            encoder,configuration=configured
+        self.encoder=encoder
         try:
             encoder.meter=PeakMeter()
             self.effective_quality=int(self.settings.get('quality',2))
@@ -247,27 +294,62 @@ class Engine:
                 matched=next((x for x in outputs if str(x['index'])==str(selected)),None)
                 if not matched:raise ValueError('所選播放裝置已變更，請重新選擇音訊來源')
                 encoder.capture_index=int(selected)
-            packets=audio.packets(encoder,86400,True,1.0)
-            pump=MediaPacketPump(packets)
-            source=protocol.add_source(audio.caps(48000),pump)
+            serial_transport = getattr(tr.sink, 'transport', None)
+            acl_queue = d.host.get_data_packet_queue(connection.handle)
+
+            def link_backlog():
+                serial_bytes = serial_transport.get_write_buffer_size() if serial_transport else 0
+                return serial_bytes, acl_queue.pending if acl_queue else 0
+
+            self.stats = {}
+            buffer_ms = 160 if self.settings.get('audioBuffer')=='stable' else 60
+            self.forward(f'Audio codec {codec}, {encoder.rate} Hz; PCM prebuffer {buffer_ms} ms')
+            packets = audio.packets(encoder, 86400, True, 1.0, buffer_ms=buffer_ms,
+                                    link_backlog=link_backlog)
+            pump = MediaPacketPump(packets, clock=audio.MonotonicClock())
+            delay_reporting=any(cap.service_category==AVDTP_DELAY_REPORTING_SERVICE_CATEGORY for cap in sink.capabilities)
+            source=protocol.add_source(configuration,pump,delay_reporting=delay_reporting)
+            def report_delay(delay):
+                self.sink_delay=delay/10
+                self.forward(f'Headphone AVDTP delay: {self.sink_delay:g} ms')
+                emit('latency',sink_delay_ms=self.sink_delay)
+            source.on(source.EVENT_DELAY_REPORT,report_delay)
             stream=await asyncio.wait_for(protocol.create_stream(source,sink),10)
             controls=None
             levels=None
             battery_task=None
             controls_stop=asyncio.Event()
             try:
-                await asyncio.wait_for(stream.start(),15);self.state('streaming',address=address,codec='LDAC',rate=48000,quality=self.settings.get('quality',2))
+                await asyncio.wait_for(stream.open(),10)
+                encoder.media_mtu=stream.rtp_channel.peer_mtu
+                if codec=='SBC':
+                    encoder.frames_per_packet=max(1,min(4,(encoder.media_mtu-13)//encoder.frame_length))
+                self.codec=codec
+                await asyncio.wait_for(stream.start(),15)
+                self.state('streaming',address=address,codec=codec,rate=encoder.rate,quality=self.settings.get('quality',2),sink_delay_ms=self.sink_delay)
                 controls=asyncio.create_task(self.control_loop(d,connection,encoder,controls_stop))
                 levels=asyncio.create_task(self.meter_loop(encoder.meter,controls_stop))
                 def battery_update(value):
                     self.battery={**value,'address':address,'updatedAt':time.time(),'connected':True}
                     emit('battery',**self.battery)
-                battery_task=asyncio.create_task(monitor_battery(connection,battery_update,controls_stop))
+                async def battery_monitor():
+                    if service:=getattr(d,'hfp_battery',None):
+                        try:
+                            await service.monitor(connection,battery_update,controls_stop)
+                            return
+                        except asyncio.CancelledError:raise
+                        except Exception as error:
+                            self.forward('HFP battery unavailable:',type(error).__name__,str(error))
+                            battery_update({'percent':None,'source':'HFP','reason':'HFP 未取得電量；嘗試其他電量通道'})
+                    if not controls_stop.is_set():
+                        await monitor_battery(connection,battery_update,controls_stop)
+                battery_task=asyncio.create_task(battery_monitor())
                 waiter=asyncio.create_task(pump.wait_for_completion());lost=asyncio.create_task(ended.wait())
                 try:await asyncio.wait([waiter,lost],return_when=asyncio.FIRST_COMPLETED)
                 finally:
                     waiter.cancel();lost.cancel()
                 if pump.pump_task and pump.pump_task.done() and not pump.pump_task.cancelled() and pump.pump_task.exception():raise pump.pump_task.exception()
+                if ended.is_set():raise ConnectionError('耳機藍牙連線已中斷')
             finally:
                 controls_stop.set()
                 if levels:
@@ -306,7 +388,9 @@ class Engine:
     async def control_loop(self,d,conn,encoder,stop):
         last_rssi=0;last_quality=int(self.settings.get('quality',2))
         policy=AdaptiveQuality(last_quality)
-        encoder.dll.ldacBT_set_eqmid.argtypes=[ctypes.c_void_p,ctypes.c_int]
+        is_ldac=isinstance(encoder,audio.Encoder)
+        if is_ldac:
+            encoder.dll.ldacBT_set_eqmid.argtypes=[ctypes.c_void_p,ctypes.c_int]
         while not stop.is_set():
             await asyncio.sleep(.2)
             if stop.is_set():break
@@ -327,6 +411,7 @@ class Engine:
                     # Classic HCI RSSI is a relative link metric, NOT calibrated dBm.
                     self.rssi=r.rssi;emit('signal',relativeRssi=self.rssi)
                 except Exception:pass
+            if not is_ldac:continue
             sink_transport=getattr(self.packet_sink,'transport',None)
             backlog=sink_transport.get_write_buffer_size() if sink_transport else 0
             desired=policy.choose(int(self.settings.get('quality',2)),bool(self.settings.get('adaptive')),self.baud,self.rssi,self.stats.get('capture_drops',0),backlog,time.monotonic())
@@ -436,7 +521,7 @@ class Engine:
         return await self.driverStatus({})
     async def driverInstall(self,_):return await self.driver('install')
     async def driverRemove(self,_):return await self.driver('remove')
-    async def exportLogs(self,_):return {'version':'0.1.4','log':self.log,'ports':self.ports(),'status':self.status,'stats':self.stats}
+    async def exportLogs(self,_):return {'version':'0.1.6','log':self.log,'ports':self.ports(),'status':self.status,'stats':self.stats,'codec':self.codec,'sink_delay_ms':self.sink_delay}
 
     async def autoconnect(self):
         previous_ports=None
@@ -460,7 +545,7 @@ class Engine:
                         async with self.operation_lock:
                             if self.status in ('idle','error','waiting') and not self.auto_paused:
                                 self.next_retry=time.monotonic()+10
-                                try:await self.connect({'port':port})
+                                try:await self.connect({'port':port,'_automatic':True})
                                 except Exception as e:
                                     self.checked_port=None;self.forward('Auto-connect:',e)
                                     self.state('error',message='重新連線未完成，稍後會自動重試。')

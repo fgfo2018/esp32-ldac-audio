@@ -12,6 +12,7 @@ function connectionProblem(state){
  if(/USB.*中斷|USB transport|could not open port|找不到指定的檔案|已連接的 ESP32/i.test(detail))return make('ESP32 的 USB 連線已中斷',['重新插緊 USB 線。','若電腦已偵測到板子，確認選擇的是目前的序列埠，再重試連線。'],'goto-bluetooth','檢查裝置與連線');
  if(/韌體通訊|990 kbps 需要|音訊橋接韌體/i.test(detail))return make('ESP32 韌體尚未準備好',['先到「裝置與韌體」重新偵測板子。','依該頁提示更新相容的音訊橋接韌體，再重新連線。'],'goto-chip','檢查韌體');
  if(/所選播放裝置已變更/.test(detail))return make('原本的音訊來源已不存在',['回主畫面重新選擇「音訊來源」。','再按「開始播放」。'],'goto-home','選擇音訊來源');
- if(/未提供 LDAC/.test(detail))return make('耳機已配對，但尚未提供 LDAC',['若耳機支援 LDAC，請在耳機 App 開啟音質優先，並關閉不相容的多點連線設定。','目前程式尚未提供 SBC／AAC 播放，調整後再重連。'],'goto-bluetooth','查看耳機');
+ if(/未提供 LDAC/.test(detail))return make('耳機已配對，但尚未提供 LDAC',['若耳機支援 LDAC，請在耳機 App 開啟音質優先，並關閉不相容的多點連線設定。','也可在主畫面選擇 AAC 或 SBC，再開始播放。'],'goto-home','選擇藍牙編碼');
+ if(/未提供 (AAC|SBC)|編碼器不相容/.test(detail))return make('耳機無法使用所選編碼',['在主畫面選擇這副耳機支援的藍牙編碼，再開始播放。'],'goto-home','選擇藍牙編碼');
  return make('操作未完成',['請先檢查 ESP32 USB 連接與耳機電源，再重試。','若持續發生，請到「設定」匯出診斷紀錄。'],'goto-settings','查看診斷');
 }

@@ -6,6 +6,9 @@ Sony libldac encoder: https://android.googlesource.com/platform/external/libldac
 PyAudioWPatch: https://github.com/s0d3s/PyAudioWPatch (MIT; PortAudio licenses apply)
 python-soxr / libsoxr: https://github.com/dofuuz/python-soxr (LGPL-2.1-or-later)
 NumPy: https://numpy.org/ (BSD-3-Clause and bundled library notices)
+PyAV 19.0.2: https://github.com/PyAV-Org/PyAV/tree/v19.0.2 (BSD-3-Clause)
+FFmpeg shared libraries from the PyAV 19.0.2 Windows wheel (libavcodec LGPL-3.0-or-later):
+https://ffmpeg.org/ and https://github.com/PyAV-Org/pyav-ffmpeg
 pySerial / pyserial-asyncio: https://github.com/pyserial/pyserial (BSD-3-Clause)
 esptool: https://github.com/espressif/esptool (GPL-2.0-or-later; original source is available at this URL)
 ESP32 firmware framework: https://github.com/espressif/arduino-esp32 (LGPL-2.1-or-later), ESP-IDF (Apache-2.0), Espressif binary controller licenses.

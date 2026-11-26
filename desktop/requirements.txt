@@ -7,3 +7,4 @@ pyserial==3.5
 pyserial-asyncio==0.6
 esptool==5.6.0
 pyinstaller==6.22.2
+av==19.0.2

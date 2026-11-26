@@ -1,7 +1,7 @@
 const {app,BrowserWindow,ipcMain,dialog,shell,Tray,Menu,nativeImage}=require('electron');
 const {spawn}=require('node:child_process');
 const fs=require('node:fs');const path=require('node:path');const readline=require('node:readline');
-let window,worker,tray,quitting=false,stopping=false,critical=false,seq=0;let restartTimer=null,restartCount=0,reconnectPaused=false;const pending=new Map();let settings={autoConnect:false,autoStart:false,tray:true,address:'',port:'',quality:2,adaptive:false,capture:'',volumeLimit:20};
+let window,worker,tray,quitting=false,stopping=false,critical=false,seq=0;let restartTimer=null,restartCount=0,reconnectPaused=false;const pending=new Map();let settings={autoConnect:false,autoStart:false,tray:true,address:'',port:'',codec:'LDAC',audioBuffer:'low',quality:2,adaptive:false,capture:'',volumeLimit:20};
 const assets=()=>app.isPackaged?path.join(process.resourcesPath,'assets'):path.join(__dirname,'resources');
 function send(event){if(window&&!window.isDestroyed())window.webContents.send('audio:event',event)}
 function record(event){
@@ -43,7 +43,7 @@ function rpc(method,params={}){return new Promise((resolve,reject)=>{
  catch(error){clearTimeout(timer);pending.delete(id);reject(error)}
 })}
 function manualDisconnect(){reconnectPaused=true;return rpc('disconnect')}
-function saveSettings(){fs.writeFileSync(path.join(app.getPath('userData'),'settings.json'),JSON.stringify(settings,null,2));app.setLoginItemSettings({openAtLogin:!!settings.autoStart});rpc('settings',settings).catch(()=>{})}
+function saveSettings(){fs.writeFileSync(path.join(app.getPath('userData'),'settings.json'),JSON.stringify(settings,null,2));app.setLoginItemSettings({openAtLogin:!!settings.autoStart});return rpc('settings',settings)}
 async function create(){
  try{settings={...settings,...JSON.parse(fs.readFileSync(path.join(app.getPath('userData'),'settings.json'),'utf8'))}}catch{}
  window=new BrowserWindow({width:1220,height:850,minWidth:980,minHeight:720,show:!process.env.ESP32_AUDIO_SMOKE,frame:false,backgroundColor:'#f5f7fa',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
@@ -80,11 +80,11 @@ async function create(){
 ipcMain.on('window',(_,action)=>{if(action==='minimize')window.minimize();if(action==='close')window.close()});
 ipcMain.handle('audio:call',async(_,method,params)=>{
  const allowed=new Set(['snapshot','scan','connect','disconnect','control','probe','flash','backup','restore','driverStatus','driverInstall','driverRemove','settings','soundSettings','exportLogs','forget']);if(!allowed.has(method))throw Error('不支援的操作');
- if(method==='settings'){if(params.autoConnect===true&&!settings.autoConnect)reconnectPaused=false;settings={...settings,...params};saveSettings();return settings}
+ if(method==='settings'){if(params.autoConnect===true&&!settings.autoConnect)reconnectPaused=false;settings={...settings,...params};await saveSettings();return settings}
  if(method==='disconnect')return manualDisconnect();
  if(method==='connect')reconnectPaused=false;
  if(method==='scan')reconnectPaused=true;
- if(method==='forget'){const r=await dialog.showMessageBox(window,{type:'question',buttons:['取消','取消配對'],defaultId:0,message:'移除此耳機的配對資料？',detail:'下次連線需要讓耳機重新進入配對模式。'});if(r.response!==1)return null;if(settings.address===params.address){settings.address='';saveSettings()}}
+ if(method==='forget'){const r=await dialog.showMessageBox(window,{type:'question',buttons:['取消','取消配對'],defaultId:0,message:'移除此耳機的配對資料？',detail:'下次連線需要讓耳機重新進入配對模式。'});if(r.response!==1)return null;if(settings.address===params.address){settings.address='';await saveSettings()}}
  if(method==='soundSettings'){await shell.openExternal('ms-settings:sound');return true}
  if(method==='exportLogs'){const result=await dialog.showSaveDialog(window,{defaultPath:'ESP32-Audio-Diagnostics.json'});if(result.canceled)return null;const log=await rpc('exportLogs');fs.writeFileSync(result.filePath,JSON.stringify(log,null,2));return result.filePath}
  if(method==='backup'){const result=await dialog.showSaveDialog(window,{defaultPath:'ESP32-firmware-backup.bin',filters:[{name:'Firmware',extensions:['bin']}]});if(result.canceled)return null;params={...params,path:result.filePath}}
